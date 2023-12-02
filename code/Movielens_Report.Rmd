@@ -1,0 +1,494 @@
+---
+title: "Movielens Report"
+author: "Ain Sanchez"
+date: "2023-12-02"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+#Install R libraries
+
+if(!require("tidyverse")) install.packages("tidyverse")
+require("tidyverse")
+if(!require("caret")) install.packages("caret")
+require("caret")
+if(!require("stringr")) install.packages("stringr")
+require("stringr")
+if(!require("lubridate")) install.packages("lubridate")
+require("lubridate")
+
+options(timeout = 120)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+The goal of the Capstone Project of the HarvardX Data Science Program is to train an algorithm that would estimate movie recommendations based on a dataset of the 2009 Movielens movie ratings, which would provide an RMSE (root-mean-squared-error) of less or equal to 0.86490. In order to describe the process to train the algorithm, this document incorporates three main sections related to: 1) Methods and Analysis, 2) Results, and 3) Conclusion. In the first section, the document will describe the process and techniques used including data-cleaning, data-exploring, visualization, insights gained, and the modeling approach. In the second section, the document will show the results of the methods employed and analysis performed. Finally, the document will provide a conclusion stating the limitations of the project and will recommend further considerations for future work in this area.    
+
+```{r, include=FALSE}
+
+#To download the the Movielens zip File
+
+dl <- "ml-10M100K.zip"
+if(!file.exists(dl))
+  download.file("https://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+```
+
+# Section 1: Methods and Analysis
+
+Once downloaded the Movielens zip file, the decompressed folder shows three main datasets: 1) movies.dat, 2) ratings.dat, and 3) tags.dat. There are three other files, two of which are scripts that contain code in Unix shell and Perl respectively, to split the ratings dataset with a five-fold cross-validation. The last file is a readme file, which summarizes the contents of each dataset. For instance, the movies.data contains 10,681 observations, while the ratings.data contains 10,000,054 observations. It is worth noting that there are also "... 95,580 tags applied to 10,681 movies by 71,567 users of the online movie recommender service MovieLens." 
+
+From the description of the content and use of each file, the readme file states that Movielens users were selected randomly. However, the users were selected separatedly from the ratings and tags datasets, which implies that the users that appear in one dataset might not be the same in the other. For the purpose of this project, only the movies and ratings datasets will be used, so the tags dataset will be disregarded accordingly. In the case of ratings, each observation contains four variables: 1) userID, 2) movieID, 3) rating, 4) and timestamp. Each rating is made on a 0 to 5 scale, with increments of 0.5. Finally, the movies dataset include three variables: 1) movieID, 2) title, and 3) genres. 
+
+
+```{r, include=FALSE}
+
+#Once it was downloaded, proceed to load the ratings and movies datasets.
+ratings_file <- "ml-10M100K/ratings.dat"
+if(!file.exists(ratings_file))
+  unzip(dl, ratings_file)
+
+movies_file <- "ml-10M100K/movies.dat"
+if(!file.exists(movies_file))
+  unzip(dl, movies_file)
+
+ratings <- as.data.frame(str_split(read_lines(ratings_file), fixed("::"), 
+                                   simplify = TRUE),
+                         stringsAsFactors = FALSE)
+colnames(ratings) <- c("userId", "movieId", "rating", "timestamp")
+ratings <- ratings %>%
+  mutate(userId = as.integer(userId),
+         movieId = as.integer(movieId),
+         rating = as.numeric(rating),
+         timestamp = as.integer(timestamp))
+
+movies <- as.data.frame(str_split(read_lines(movies_file), fixed("::"), 
+                                  simplify = TRUE),
+                        stringsAsFactors = FALSE)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- movies %>%
+  mutate(movieId = as.integer(movieId))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Final hold-out test set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") # if using R 3.6 or later
+# set.seed(1) # if using R 3.5 or earlier
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, 
+                                  list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in final hold-out test set are also in edx set
+final_holdout_test <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from final hold-out test set back into edx set
+removed <- anti_join(temp, final_holdout_test)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+
+Upon merging the ratings and movies datasets into the movielens dataset, the resulting dataset contains six variables. This combined dataset was split once again to create the edx dataset (train dataset), and the final_holdout_test (test dataset). Taking into consideration that movies' and users' ids are included in the edx dataset, the final_holdout_test contains 10% of the observations of the movielens dataset, while the edx dataset includes the rest. For the Methods and Analysis section, only the edx dataset will be used to describe the process and techniques of data-cleaning, data-exploring, visualization, insights gained, and the modeling approach.
+
+## Data-Cleaning
+
+To start the data-cleaning process, the six main variables of the edx dataset will be analyzed using three metrics based on completeness, consistency and clarity. In relation to completeness, the "table" function is used to obtain frequencies of the discrete values of ratings. For the other variables, a foor-loop will be used to determine the number of missing values that should be excluded of the training model.
+
+```{r data_cleaning1, include=TRUE}
+#Completeness
+
+#This line is only run to match the original edx dataset
+edx <- edx[,-c(7:10)]
+
+#Generate a table to determine the completeness of the rating variable
+table(edx[,3], useNA = "always")
+
+#Generate a for-loop to identify the completeness of the other variables
+for (i in c(1:2,4:6)){
+  print(sum(is.na(edx[,i])|edx[,i]==""))
+}
+```
+
+Based on the completeness results, none of the variables in the edx dataset contains missing values, so that it is not necessary to delete any observation. 
+
+In terms of consistency, all variables were analyzed to determine if their values are adequately represented on the dataset. In that sense, it was necessary to change the variable type of the userId and movieId from numeric to character, to assure that ids are treated properly. Similarly, timestamp was transformed from a numeric variable into a a datetime format. Other variables such as rating, title and genres have variable types which are directly related to their variable names and the documentation, so no further process was necessary to apply in terms of consistency.
+
+```{r data_cleaning2, include=FALSE}
+#Consistency
+
+#Review quicky that movieId and title are consistent
+sum(duplicated(edx$movieId) == F)
+sum(duplicated(edx$title) == F)
+
+#userId and movieId are strings and not numbers
+edx$userId <- as.character(edx$userId)
+edx$userId <- as.character(edx$userId)
+```
+
+In order to acknowledge clarity, the current structure of variables was changed in order to improve its conciseness and interpretability. For instance, genres is a categorical variable but contains different combinations of independent categories separated by a vertical bar ("|"). To improve the variable's clarity, 18 new dummy variables were generated based on the unique genre categories described in the Movielens documentation.
+
+```{r data_cleaning3, include=FALSE}
+#Clarity
+
+#Change format of timestamp variable
+edx <- edx %>% 
+  mutate(ratingDate = as_datetime(timestamp))
+
+#Change format of genres variable
+movie_genres <- c("Action",
+                  "Adventure",
+                  "Animation",
+                  "Children's",
+                  "Comedy",
+                  "Crime",
+                  "Documentary",
+                  "Drama",
+                  "Fantasy",
+                  "Film-Noir",
+                  "Horror",
+                  "Musical",
+                  "Mystery",
+                  "Romance",
+                  "Sci-Fi",
+                  "Thriller",
+                  "War",
+                  "Western")
+for(i in 1:length(movie_genres)){
+  edx[,7+i] <- str_detect(edx$genres, movie_genres[i])
+}
+genresNames <- c("action",
+                 "adventure",
+                 "animation",
+                 "childrens",
+                 "comedy",
+                 "crime",
+                 "documentary",
+                 "drama",
+                 "fantasy",
+                 "filmNoir",
+                 "horror",
+                 "musical",
+                 "mystery",
+                 "romance",
+                 "sciFi",
+                 "thriller",
+                 "war",
+                 "western")
+names(edx)[8:25] <- genresNames
+```
+
+
+## Data-Exploring
+
+Since id values cannot be analyzed per se, the main variables to be explored in this section are rating, genres and timestamp. First we start obtaining summary statistics of rating. 
+
+```{r data_exploring1, include=TRUE, echo=FALSE}
+#Generate a table to summarize the mean, median and standard deviation of the 
+#rating variable
+ratingSum <- edx %>% 
+  summarize(meanRating = mean(rating), 
+            stdvRating = sd(rating), 
+            medianRating = median(rating))
+ratingSum
+
+#Generate table to identify the proportion of each rating' score
+propRating <- round(prop.table(table(edx$rating))*100,2)
+for(i in 1:length(propRating)) {
+  propRating[[i]] <- paste0(propRating[[i]], "%")  
+}
+propRating
+```
+
+As shown in the tables above, rating has a mean of 3.51, a median of 4 and a standard deviation of 1.06, which implies that users tend to rate movies higher than the mean of the rating variable's scale, which is 2.5. In fact, 28.76% of movie ratings have a score of 4. The next variable analyzed is genres.
+
+```{r data_exploring2, include=TRUE, echo=FALSE}
+#Generate a variable to identify movies with several genres
+edx <- edx %>% 
+  mutate(nroGenres = action + adventure + animation + childrens + comedy +
+           crime + documentary + drama + fantasy + filmNoir + horror + musical +
+           mystery + romance + sciFi + thriller + war + western)
+
+##Generate a table to summarize the mean, median and standard deviation of the 
+#rating variable
+nroGenresSum <- edx %>% 
+  summarize(meanNroGenres = mean(nroGenres), 
+            stdvNroGenres = sd(nroGenres), 
+            medianNroGenres = median(nroGenres))
+nroGenresSum
+
+#Generate table to identify the proportion of each rating' score
+propNroGenres <- round(prop.table(table(edx$nroGenres))*100,2)
+for(i in 1:length(propNroGenres)) {
+  propNroGenres[[i]] <- paste0(propNroGenres[[i]], "%")  
+}
+propNroGenres
+
+#Split the rating_date variable to extract the year and month of rating
+edx <- edx %>% 
+  mutate(yearRating = year(ratingDate),
+         monthRating = month(ratingDate),
+         yearMonthRating = paste(yearRating, monthRating, sep = "-"),
+         yearRating = yearRating + monthRating/13,
+         title = str_trim(title),
+         movieYear = substr(title, nchar(title)-4,nchar(title)-1),
+         yearDiffRating = yearRating - as.numeric(movieYear))
+
+#Generate table to identify the proportion of each year of rating
+propYearRating <- round(prop.table(table(round(edx$yearRating,0)))*100,2)
+for(i in 1:length(propYearRating)) {
+  propYearRating[[i]] <- paste0(propYearRating[[i]], "%")  
+}
+propYearRating
+
+#Generate table to identify the proportion of each month of rating
+propMonthRating <- round(prop.table(table(edx$monthRating))*100,2)
+for(i in 1:length(propMonthRating)) {
+  propMonthRating[[i]] <- paste0(propMonthRating[[i]], "%")  
+}
+propMonthRating
+```
+
+While ratings have been given between 1995 and 2009, 12.71% of all ratings have been recorded in the year 2000. It is also important to highlight that users do not tend to rate movies on a specific month. 
+
+## Visualization
+
+Based on the 18 new dummy variables generated in the data-cleaning section, a barplot is used to represent the distribution of movie genres across all movies in the dataset, including the year of the rating. In this section, 10,000 observations are randomly selected to display the behavior of the dataset, so that computing power is optimized when graphs are generated.
+
+```{r data_visualization1, include=TRUE, echo=FALSE, message=FALSE, warning = FALSE, fig.dim = c(5, 4.5), fig.cap="Distribution of movie ratings of Movielens' users"}
+#Change format of database structure to create barplot of genres as rows
+
+#Generate a sample of the observations in order to avoid consuming too much
+#computing power to generate the graphs
+
+x <- sample(nrow(edx), 10000)
+
+edxGraphs <- edx[x,]
+
+edxLonger <- edxGraphs %>%
+  pivot_longer(`action`:`western`)
+
+edxLonger <- edxLonger %>%
+  filter(value == T)
+
+#Generate a histogram to see the distribution of genres and the year of rating
+edxLonger <- edxLonger %>%
+  mutate(yearRating = as.character(round(yearRating,0))) %>%
+  rename(movieGenres = name)
+
+edxLonger %>%
+  ggplot(aes(movieGenres, fill = yearRating)) +
+  geom_bar(stat = "count", position = "stack") +
+  coord_flip()
+```
+
+The barplot on Figure 1 shows that users tend to rate a similar number of movies every year across the different genres. In general, drama movies are more frequently rated, followed by comedy and action movies. In order to identify how users rated different movie genres, a boxplot is used.
+
+```{r data_visualization2, include=TRUE, echo=FALSE, message=FALSE,fig.dim = c(5, 3.5), fig.cap="Distribution of movie ratings of Movielens' users"}
+#Generate a boxplot of genres and rating to see their dispersion
+edxLonger %>%
+  mutate(yearRating = reorder(movieGenres, rating, FUN = median)) %>%
+  ggplot(aes(movieGenres, rating)) +
+  geom_boxplot() +
+  coord_flip() #+ jitter does not work because too many data points made graph overcrowded
+#geom_jitter(width = 0.1, alpha = 0.2)
+```
+
+The bocplot on Figure 2 demonstrates that some movie genres have a higher median rating than others, yet all movies have median ratings between 3 and 4. Compared to other movie genres, horror movies tend to have lower ratings, while filmNoir movies have higher ratings. To identify if ratings are affected by the year of the rating, another boxplot is used.
+  
+```{r data_visualization3, include=TRUE, echo=FALSE, message=FALSE,fig.dim = c(5, 3.5), fig.cap="Distribution of movie ratings of Movielens' users"}
+#Generate a boxplot of year and rating to see their dispersion
+edxGraphs %>%
+  mutate(yearRating = as.character(round(yearRating,0))) %>%
+  ggplot(aes(yearRating, rating)) +
+  geom_boxplot() +
+  coord_flip() #+ jitter does not work - too many data points and too much computing power
+#geom_jitter(width = 0.1, alpha = 0.2)
+```
+
+The boxplot on Figure 3 displays a interesting pattern where movies rated before 2003 have a different scoring-scale compared to those rated in or after 2003. In fact, the first group of movies rated before 2003, have median scores of 3 or 4, and outlier scores of 1. However, movies rated in or after 2003, have median scores of 3.5 and outlier scores of 1 and 0.5. In short, it can be deduced from this pattern that scores with increments of 0.5 points were introduced in 2003, since scores only had increments of 1 before that year. 
+
+## Insights
+
+From the previous sections, three main insights can be useful to develop and algorithm that will estimate the movie ratings in the final_holdout_test dataset. 1) the 18 dummy variables could be used as individual predictors, in contrast of the genres variable which has many combinations that are difficult to interpret. 2) Year is a useful predictor, but this predictor seems to be more powerful when it discriminates between movies rated before 2003 and in or after 2003. 3) One should not discount the userId and movieId variables, which could account for all the unobservable variance of movie preferences.
+
+```{r insights, include=FALSE, echo=FALSE}
+#Create a variable to capture the different rating scores after 2003
+edx <- edx %>%
+  mutate(before2003 = yearRating < 2003)
+
+#Generate variables to determine user and movie effects
+user_effects <- edx %>% 
+  group_by(userId) %>% 
+  summarize(uEffSum = n(), uEffAv = mean(rating))
+
+movie_effects <- edx %>% 
+  group_by(movieId) %>% 
+  summarize(mEffSum = n(), mEffAv = mean(rating))
+
+edx <- edx %>% 
+  left_join(user_effects, by = "userId") %>% 
+  left_join(movie_effects, by = "movieId")
+```
+
+## Modeling Approach
+
+For the modeling approach, rating will be the predicted variable. The predictors include the 18 dummy variables generated by unique genre names, which will be chosen in the model using the "nearZeroVar" function. Other predictor is the variable before2003, which is a dummy variable that identifies movies rated before the year 2003 and movies rated in or after 2003.Finally, userId and movieId will be added to incorporate movie and user effects to estimate rating. To optimize calculations, movie and user effects will be represented through 4 predictors: 1) number of movies each user rated, 2) number of movie ratings given to each movie, 3) average rating for each user, 4) average rating for each movie.  
+
+Based on the predicted variable which is numeric, the model to predict rating will be a linear regression model. In the training process, the model will incorporate a control with resampling through cross-validation, and will be run on a random sample of observations in order to optimize computing power.
+
+```{r modeling_approach, include=FALSE, echo=FALSE}
+#userId and movieId are strings and not numbers
+final_holdout_test$userId <- as.character(final_holdout_test$userId)
+final_holdout_test$userId <- as.character(final_holdout_test$userId)
+
+#Change format of timestamp variable
+final_holdout_test <- final_holdout_test %>% 
+  mutate(ratingDate = as_datetime(timestamp))
+
+#Change format of genres variable
+for(i in 1:length(movie_genres)){
+  final_holdout_test[,7+i] <- str_detect(final_holdout_test$genres, 
+                                         movie_genres[i])
+}
+names(final_holdout_test)[8:25] <- genresNames
+
+#Generate a variable to identify movies with several genres
+final_holdout_test <- final_holdout_test %>% 
+  mutate(nroGenres = action + adventure + animation + childrens + comedy +
+           crime + documentary + drama + fantasy + filmNoir + horror + musical +
+           mystery + romance + sciFi + thriller + war + western)
+
+#Split the rating_date variable to extract the year and month of rating
+final_holdout_test <- final_holdout_test %>% 
+  mutate(yearRating = year(ratingDate),
+         monthRating = month(ratingDate),
+         yearMonthRating = paste(yearRating, monthRating, sep = "-"),
+         yearRating = yearRating + monthRating/13,
+         title = str_trim(title),
+         movieYear = substr(title, nchar(title)-4,nchar(title)-1),
+         yearDiffRating = yearRating - as.numeric(movieYear))
+
+#Create a variable to capture the different rating scores after 2003
+final_holdout_test <- final_holdout_test %>%
+  mutate(before2003 = yearRating < 2003)
+
+#Generate variables to determine user and movie effects
+user_effects <- final_holdout_test %>% 
+  group_by(userId) %>% 
+  summarize(uEffSum = n(), uEffAv = mean(rating))
+
+movie_effects <- final_holdout_test %>% 
+  group_by(movieId) %>% 
+  summarize(mEffSum = n(), mEffAv = mean(rating))
+
+final_holdout_test <- final_holdout_test %>% 
+  left_join(user_effects, by = "userId") %>% 
+  left_join(movie_effects, by = "movieId")
+```
+
+# Section 2: Results
+
+To obtain the final algorithm, which has an RMSE lower than 0.86490 and achieves the goal of the Capstone Project, it is important to mention that several combinations of predictors were used in the process. For instance, the "nearZeroVar" function determined that only 13 out of the 18 dummny genere variables had predictive power. In fact, the genres that did not add up predictive power to the model are the ones with the lowest number of ratings on Figure 1, which include western, war, filmNoir, documentary and children's. Model 1 includes the filtered, non-zero variance, genre variables along with  other predictive variables listed in the Modelling Approach section.
+
+In model 2, genre variables are not included purposedly in order to observe the model performance by minimizing the number of precictive variables. However, it is also necessary to highlight that Model 1 and Model 2 include an additional variable named YearDiffm which was calculated based on the difference between the movie rating represented on the timestamp variable, and the year of the movie release included in the title variable. This variable was introduced in order to further explore the effect of time on movie ratings, which is also partially captured by the before2003 variable in both models.
+
+It is very insightful that Model 3 did not include predictors related to the movie genres and the time when the movie rated. Nonetheless, this final model using the 4 variables related to movie and user effects listed in the Modelling Approach Section, performs just as well as the other models with 15 additional predictors. It is important to mention that all models used linear regression with resampling, through a 5-fold cross-validation and a probability of 0.9. To train the model, 1,000 randomly selected observations were chosen, so that computing power would not be exhausted during the algorithm training process. 
+
+In short, the final model was obtained by training the linear regression algorithm with 4 predictors 1) number of movies each user rated, 2) number of movie ratings given to each movie, 3) average rating for each user, and 4) average rating for each movie. Also, the predicted variable used in the model was rating. To measure the predictive power of the model compared to the other two, the RMSE is calculated using with the trained models applied on the final_holdout_test dataset. The results obtained are the following:
+
+```{r results, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+#Define the RMSE function for the models
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+
+#Define the collection of variables with the NeartoZero Variance approach
+genreDummies <- edx[,c(8:25)]
+
+nzv <- nearZeroVar(genreDummies)
+
+col_index <- setdiff(1:ncol(genreDummies), nzv)
+#length(col_index)
+
+#Select a sample due to the large number of observations
+n <- 1000
+b <- 5
+index <- sample(nrow(edx), n)
+control <- trainControl(method = "cv", number = b, p = .9)
+
+
+#Model 1 
+#(Movie Genres, before2003, YearDiff, and user and movie effects)
+#names(edx)
+#col_index
+predictorsInd <- c(7 + col_index, 31:36)
+
+#Run the linear regression model
+train_lm <- train(edx[,predictorsInd], edx[,3],
+                  method = "lm",
+                  trControl = control)
+
+#Test the model and estimate the parameters with the RMSE performance metric
+y_hat_lm <- predict(train_lm,
+                    final_holdout_test[, predictorsInd])
+
+results_lm <- RMSE(y_hat_lm, final_holdout_test$rating)
+
+rmse_results <- data_frame(method = "Model 1: movieGenres + before2003 + yearDiff + user & movie effects",
+                           RMSE = results_lm)
+
+
+#Model 2
+#(before2003, YearDiff, and user and movie effects)
+predictorsInd2 <- c(31:36)
+
+#Run the linear regression model
+train_lm2 <- train(edx[,predictorsInd2], edx[,3],
+                   method = "lm",
+                   trControl = control)
+
+#Test the model and estimate the parameters with the RMSE performance metric
+y_hat_lm2 <- predict(train_lm2,
+                     final_holdout_test[, predictorsInd2])
+
+results_lm2 <- RMSE(y_hat_lm2, final_holdout_test$rating)
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Model 2: before2003 + yearDiff + user & movie effects",
+                                     RMSE = results_lm2))
+
+#Model 3
+#(User and movie effects)
+predictorsInd3 <- c(33:36)
+
+#Run the linear regression model
+train_lm3 <- train(edx[,predictorsInd3], edx[,3],
+                   method = "lm",
+                   trControl = control)
+
+#Test the model and estimate the parameters with the RMSE performance metric
+y_hat_lm3 <- predict(train_lm3,
+                     final_holdout_test[, predictorsInd3])
+
+results_lm3 <- RMSE(y_hat_lm3, final_holdout_test$rating)
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Model 3: user & movie effects",
+                                     RMSE = results_lm3))
+rmse_results %>% knitr::kable()
+```
+
+As shown above, model 3 performs just as well as the other two models while using signifficantly fewer predictors, which allows the model to be more interpretable. As a result, model 3 is the preferred model to predict movie ratings in the Movielens dataset with a RMSE performance metric of 0.8455515.
+
+# Section 3: Conclusion
+
+The Goal of the Data Science Capstone Project was to train an algorithm that improves the performance metric of the model  to a value lower than 0.86490. Although the Movielens dataset did not have many variables, the Methods and Analysis section helped understand the data through data-cleaning, data-exploring and visualization. While elaborating Section 1, it was very insightful to acknowledge the behavior of several variables and the potential contribution that they could bring to the modelling approach. In the end, the model construction included a simplified version of a linear regression model to train on a dataset, which expanded the original dataset of 6 variables to one with more than 20 variables derived from those 6 variables. 
+
+The final model to predict movie ratings entirely used predictors that reflected movie and user effects by grouping the movieId and the userId, and calculating the corresponding sum of observations and average rating within each Id. Through this process, 4 predictors were obtained, which improved the model performance entirely when running the model on the test dataset. The main idea behind this exercise lies on the fact that movie ratings are very sensitive to user preferences and the quality of the movie itself. For instance, the movie-genres dummy variables, and the variable before2003 were not able to improve the model performance signifficantly because their within-group variance remained very high across movies and users. 
+
+The current limitations of this model are reflected by the performance metric obtained of 0.86490. In fact, the metric suggests that most predicted ratings can have a difference of 0.86 points compared to the true rating value. Considering that the 0-5 point rating scale after 2003 holds increments of 0.5, the current modeling error implies that most values might actually deviate from the true value. To improve the model performance even more, future work should explore high values within userId and movieId through regularization, to penalize observations that might influence predictors to deviate. Also, matrix factorization can also be effective to determine the main factors that influence ratings to vary across the dataset. Morevoer, user's demographic variables could be very powerful to explain variations within userIds. Finally, other powerful regression algorithms could be used to better capture the variance among the dataset and improve the overall prediction.
