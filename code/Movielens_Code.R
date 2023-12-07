@@ -324,18 +324,18 @@ edxGraphs %>%
 edx <- edx %>%
   mutate(before2003 = yearRating < 2003)
 
-#Generate variables to determine user and movie effects
-user_effects <- edx %>% 
+#Generate variables to determine user & movie mean ratings + user & movie number of ratings
+users <- edx %>% 
   group_by(userId) %>% 
   summarize(uEffSum = n(), uEffAv = mean(rating))
 
-movie_effects <- edx %>% 
+movies <- edx %>% 
   group_by(movieId) %>% 
   summarize(mEffSum = n(), mEffAv = mean(rating))
 
 edx <- edx %>% 
-  left_join(user_effects, by = "userId") %>% 
-  left_join(movie_effects, by = "movieId")
+  left_join(users, by = "userId") %>% 
+  left_join(movies, by = "movieId")
 
 
 ############################################################################
@@ -379,18 +379,18 @@ final_holdout_test <- final_holdout_test %>%
 final_holdout_test <- final_holdout_test %>%
   mutate(before2003 = yearRating < 2003)
 
-#Generate variables to determine user and movie effects
-user_effects <- final_holdout_test %>% 
+#Generate variables to determine user and movie movie and user mean ratings and movie and user number of ratings
+users <- final_holdout_test %>% 
   group_by(userId) %>% 
   summarize(uEffSum = n(), uEffAv = mean(rating))
 
-movie_effects <- final_holdout_test %>% 
+movies <- final_holdout_test %>% 
   group_by(movieId) %>% 
   summarize(mEffSum = n(), mEffAv = mean(rating))
 
 final_holdout_test <- final_holdout_test %>% 
-  left_join(user_effects, by = "userId") %>% 
-  left_join(movie_effects, by = "movieId")
+  left_join(users, by = "userId") %>% 
+  left_join(movies, by = "movieId")
 
 
 ############################################################################
@@ -424,7 +424,7 @@ control <- trainControl(method = "cv", number = b, p = .9)
 
 
 #Model 1 
-#(Movie Genres, before2003, YearDiff, and user and movie effects)
+#(Movie Genres, before2003, YearDiff, user and movie ratings, and user and movie number of ratings)
 #names(edx)
 #col_index
 predictorsInd <- c(7 + col_index, 31:36)
@@ -440,12 +440,12 @@ y_hat_lm <- predict(train_lm,
 
 results_lm <- RMSE(y_hat_lm, final_holdout_test$rating)
 
-rmse_results <- data_frame(method = "Model 1: movieGenres + before2003 + yearDiff + user & movie effects",
+rmse_results <- data_frame(method = "Model 1: movieGenres + before2003 + yearDiff + user & movie mean ratings + user & movie number of ratings",
                            RMSE = results_lm)
 
 
 #Model 2
-#(before2003, YearDiff, and user and movie effects)
+#(before2003, YearDiff, user and movie ratings, and user and movie number of ratings)
 predictorsInd2 <- c(31:36)
 
 #Run the linear regression model
@@ -460,11 +460,11 @@ y_hat_lm2 <- predict(train_lm2,
 results_lm2 <- RMSE(y_hat_lm2, final_holdout_test$rating)
 
 rmse_results <- bind_rows(rmse_results,
-                          data_frame(method="Model 2: before2003 + yearDiff + user & movie effects",
+                          data_frame(method="Model 2: before2003 + yearDiff + user & movie mean ratings + user & movie number of ratings",
                                      RMSE = results_lm2))
 
 #Model 3
-#(User and movie effects)
+#(User and movie ratings, and user and movie number of ratings)
 predictorsInd3 <- c(33:36)
 
 #Run the linear regression model
@@ -479,6 +479,6 @@ y_hat_lm3 <- predict(train_lm3,
 results_lm3 <- RMSE(y_hat_lm3, final_holdout_test$rating)
 
 rmse_results <- bind_rows(rmse_results,
-                          data_frame(method="Model 3: user & movie effects",
+                          data_frame(method="Model 3: user & movie mean ratings + user & movie number of ratings",
                                      RMSE = results_lm3))
 rmse_results %>% knitr::kable()
